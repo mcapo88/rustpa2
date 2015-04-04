@@ -1,4 +1,4 @@
-//
+// from pa2-latest
 // gash.rs
 //
 // Starting code for PA2
@@ -13,13 +13,13 @@ use std::old_io::BufferedReader;
 use std::process::{Command, Stdio};
 use std::old_io::stdin;
 use std::{old_io, os};
-use std::os::getcwd;
 use std::str;
 use std::env;
 use std::old_io::fs::PathExtensions; //this is for checking if file exists in cd
 use std::collections::LinkedList;
 use std::thread; //for spawning multiple threads of piped commands
 use std::sync::mpsc::{channel, Sender, Receiver};
+use std::os::getcwd;
 const MSG_SIZE: usize = 128; //how big the buffer will be (bytes)
 //the message struct is what we'll be passing from sender to receiver
 struct message{
@@ -147,29 +147,42 @@ impl <'a>Shell<'a> {
                 Some(x)
             }
         }).collect();
-       
+
         match argv.first() {
             Some(&program) => self.run_cmd(cmd_line),
             None => (),
         };
     }
 
-    fn run_cmd(&self, cm_line: &str) {
-        let cmd_line = cm_line.to_string().clone();
-        thread::spawn(move || {
-        let arg: Vec<&str> = cmd_line.split(' ').filter_map(|x| {
+    fn run_cmd(&self, cmd_line: &str) {
+        let cm_line = cmd_line.clone();  //it says it cannot infer an appropriate lifetime for parameter 'a due to conflicting requirements...?
+        //We want to split up the cmd_line by pipes
+        let pipes: Vec<&str> = cm_line.split('|').filter_map(|x| {
             if x == "" {
                 None
             } else {
                 Some(x)
             }
         }).collect();
-        let program = arg.first().unwrap();
-        let argv = arg.tail();
-                            
-        if Shell::cmd_exists(program) {
-            
-            let output = Command::new(program).args(argv).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
+        let mut args: Vec<Vec<&str>> = Vec::new();
+        let mut programs: Vec<&str> = Vec::new();
+        let mut argvs: Vec<&[&str]> = Vec::new();
+        //in a for loop, make a channel for every pair of pipes
+        for i in 0..pipes.len(){
+        //would declare channel here
+        let (tx, rx) = channel::<message>();
+        args[i] = pipes[i].split(' ').filter_map(|x| {
+                    if x == "" {
+                        None
+                    } else {
+                        Some(x)
+                    }
+                }).collect();
+                programs[i] = args[i].first().unwrap();
+                argvs[i] = args[i].tail();
+        if self.cmd_exists(programs[i]) {
+            thread::spawn(move|| {
+            let output = Command::new(programs[i]).args(argvs[i]).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
             let stderr=String::from_utf8_lossy(&output.stderr);
             let stdout=String::from_utf8_lossy(&output.stdout);
             if !"".eq(stdout.as_slice()) {
@@ -178,12 +191,17 @@ impl <'a>Shell<'a> {
             if !"".eq(stderr.as_slice()) {
                 print!("{}", stderr);
             }
+            let buf:[u8;MSG_SIZE] = stdout;
+            let msg = message{info:buf, length: stdout.len(), eof: false };
+            loop{tx.send(msg).unwrap();};}); //end of thread
         } else {
-            println!("{}: command not found", program);
-        }});
+            println!("{}: command not found", programs[i]);
+        }
+        loop{rx.recv();}
+        }//end of for loop
     }
 
-    fn cmd_exists(cmd_path: &str) -> bool {
+    fn cmd_exists(&self, cmd_path: &str) -> bool {
         Command::new("which").arg(cmd_path).stdout(Stdio::capture()).status().unwrap().success()
     }
 }
@@ -191,18 +209,17 @@ impl <'a>Shell<'a> {
 fn get_cmdline_from_args() -> Option<String> {
     /* Begin processing program arguments and initiate the parameters. */
     let args = os::args();
-    
+
     let opts = &[
         getopts::optopt("c", "", "", "")
     ];
-    
+
     getopts::getopts(args.tail(), opts).unwrap().opt_str("c")
-    
 }
 
 fn main() {
     let opt_cmd_line = get_cmdline_from_args();
-    
+
     match opt_cmd_line {
         Some(cmd_line) => Shell::new("").run_cmdline(cmd_line.as_slice()),
         None           => Shell::new("gash > ").run(),
