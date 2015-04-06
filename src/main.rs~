@@ -9,7 +9,7 @@
 extern crate getopts;
 
 use getopts::{optopt, getopts};
-use std::old_io::BufferedReader;
+use std::old_io::{BufferedReader, BufferedWriter};
 use std::process::{Command, Stdio};
 use std::old_io::stdin;
 use std::io::{Read, Write};
@@ -21,6 +21,8 @@ use std::collections::LinkedList;
 use std::thread; //for spawning multiple threads of piped commands
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::os::getcwd;
+//use std::io::prelude::*;
+use std::old_io::File;
 const MSG_SIZE: usize = 128; //how big the buffer will be (bytes)
 //the message struct is what we'll be passing from sender to receiver;
 struct message{
@@ -46,6 +48,7 @@ impl <'a>Shell<'a> {
             let x = stdin.read_line();
             let line = x.unwrap();
             let cmd_line = line.trim();
+            
             a.push_back(cmd_line.to_string());
             //let program = cmd_line.splitn(1, ' ').nth(0).expect("no program");
            
@@ -144,23 +147,53 @@ impl <'a>Shell<'a> {
                 Some(x)
             }
         }).collect();
-
         match argv.first() {
             Some(&program) => self.run_cmd(cmd_line),
             None => (),
         };
+       
     }
 
     fn run_cmd(&self, cmd_line: &str) {
-    
-        let pipes: Vec<&str> = cmd_line.split('|').filter_map(|x| { //split command on pipe
+        let redir_split = cmd_line.split('>');
+        let redir_vec: Vec<&str> = redir_split.collect();
+        let mut filename = " ";
+        let mut forward: bool = false;
+        let mut backward: bool = false;
+        if redir_vec.len() > 1
+        {
+            println!("forward redirection");
+            filename = redir_vec[1];
+            println!("filename is {}", filename);
+            forward = true;
+            //let mut f = File::create(&Path::new(filename));
+        }
+        let backward_redir_split = cmd_line.split('<');
+        let backward_redir_vec: Vec<&str> = backward_redir_split.collect();
+        let mut filename2 = " ";
+        
+        if backward_redir_vec.len() > 1
+        {
+            println!("backward redirection");
+            filename2 = backward_redir_vec[1];
+            println!("filename is {}", filename2);
+            backward = true;
+            //let mut f = File::create(&Path::new(filename2));
+        }
+         
+        let pipes: Vec<&str> = redir_vec[0].split('|').filter_map(|x| { //split command on pipe
             if x == "" {
                 None
             } else {
                 Some(x)
             }
         }).collect();
-        
+        let last = pipes[pipes.len()-1];
+        //println!("last pipe is {}", last);
+        let last_split = last.split(' ');
+        let last_parts: Vec<&str> = last_split.collect();
+        let last2 = last_parts[last_parts.len()-1];
+        //println!("last symbol is {}", last2);
         let (tx, rx) = channel::<message>(); //initial channel
         tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
         let mut old_rx: Receiver<message> = rx; //initialize previous receiver
@@ -171,6 +204,8 @@ impl <'a>Shell<'a> {
             let my_rx = old_rx;  //set my_rx to be the previous receiver
             old_rx = rx; //now set prev rcvr to current rcvr
             let pipe = pipes[i].to_string(); //spawn a thread for next command
+            
+            
             thread::spawn(move|| {
             let arg: Vec<&str> = pipe.split(' ').filter_map(|x| {
                     if x == "" {
@@ -195,8 +230,9 @@ impl <'a>Shell<'a> {
                             break;},
                         Ok(num) => {num},
                     };
-
-                    match stdin.write(&message.info) {
+                    //if the message does not fill the whole buffer, only read in 
+                    //the message, not the 0's.
+                    match stdin.write(&message.info[0..message.length]) {
                         Err(why) => {break;},
                         Ok(hm) => {},
                     };
@@ -206,34 +242,50 @@ impl <'a>Shell<'a> {
                 }
                 let mut stdout = process.stdout.unwrap();
                 //send the output to the next command in the chain
-                loop{ //reads byte sized blocks of given command thread and prints results. 
+                loop{ //reads byte sized blocks of given command thread 
                     let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
                     let buffer_s = match stdout.read(&mut result) {
                         Err(why) => {panic!("couldn't read stdout {}", why.description()); },
                         Ok(num) => {if num == 0 { break;} num},
                     };
+                    //println!("buff size is: {}", buffer_s);
                     let message = message{info: result, length: buffer_s, eof: buffer_s<MSG_SIZE};
                     tx.send(message);
                 }
-
-            //having some trouble getting stdout into buf (stdout is of type Cow<'_,str>?
-            //let buf:[u8;MSG_SIZE] = stdout;
-            //let msg = message{info:buf, length: stdout.len(), eof: false };
-            //loop{tx.send(msg).unwrap();};}); //end of thread
-            
             } else {
                 println!("{}: command not found", program);
             }});//end of thread
-            //loop{rx.recv();}
         }//end of for loop
-        loop{
-            let message = match old_rx.recv(){
-                Err(why) => {println!("error reading from recv {}", why); break;},
-                Ok(num) => {num}
-            };
-            println!("Final output: {}", String::from_utf8_lossy(&message.info));
-            if message.eof{ break;}
-        }
+        //get the output from the final command in the chain, then print it
+        if last2 == "&" //If true run command in the background
+        {
+            thread::spawn(move|| {
+                loop{
+                    let message = match old_rx.recv(){
+                        Err(why) => {println!("error reading from recv {}", why); break;},
+                        Ok(num) => {num}
+                    };
+                    print!("{}", String::from_utf8_lossy(&message.info));
+                    if message.eof{ break;}
+                }
+            });
+            return;
+        } else {
+            loop{
+                let message = match old_rx.recv(){
+                    Err(why) => {println!("error reading from recv {}", why); break;},
+                    Ok(num) => {num}
+                };
+                if forward
+                {
+                    let mut f = File::create(&Path::new(filename));
+                    let mut writer = BufferedWriter::new(f);
+                    writer.write_str(String::from_utf8_lossy(&message.info[0..message.length]).as_slice());
+                } else {
+                    print!("{}", String::from_utf8_lossy(&message.info));
+                }
+                if message.eof{ break;}
+            }}
     }
 
     fn cmd_exists(cmd_path: &str) -> bool {

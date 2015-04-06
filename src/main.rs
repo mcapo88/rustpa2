@@ -9,7 +9,7 @@
 extern crate getopts;
 
 use getopts::{optopt, getopts};
-use std::old_io::BufferedReader;
+use std::old_io::{BufferedReader, BufferedWriter};
 use std::process::{Command, Stdio};
 use std::old_io::stdin;
 use std::io::{Read, Write};
@@ -21,6 +21,8 @@ use std::collections::LinkedList;
 use std::thread; //for spawning multiple threads of piped commands
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::os::getcwd;
+//use std::io::prelude::*;
+use std::old_io::File;
 const MSG_SIZE: usize = 128; //how big the buffer will be (bytes)
 //the message struct is what we'll be passing from sender to receiver;
 struct message{
@@ -153,8 +155,37 @@ impl <'a>Shell<'a> {
     }
 
     fn run_cmd(&self, cmd_line: &str) {
-    
-        let pipes: Vec<&str> = cmd_line.split('|').filter_map(|x| { //split command on pipe
+        //check for forward redirection
+        let redir_split = cmd_line.split('>');
+        let redir_vec: Vec<&str> = redir_split.collect();
+        let mut filename = " ";
+        //these booleans tell us if forward or backward redirection
+        let mut forward: bool = false;
+        let mut backward: bool = false;
+        //if the vec has more than one element, there was a ">"
+        if redir_vec.len() > 1
+        {
+            println!("forward redirection");
+            filename = redir_vec[1]; //filename is second element
+            println!("filename is {}", filename);
+            forward = true; //set forward boolean to true
+            //let mut f = File::create(&Path::new(filename));
+        }
+        //same as above but for backward redirection
+        let backward_redir_split = cmd_line.split('<');
+        let backward_redir_vec: Vec<&str> = backward_redir_split.collect();
+        let mut filename2 = " ";
+        
+        if backward_redir_vec.len() > 1
+        {
+            println!("backward redirection");
+            filename2 = backward_redir_vec[1];
+            println!("filename is {}", filename2);
+            backward = true;
+            //let mut f = File::create(&Path::new(filename2));
+        }
+         
+        let pipes: Vec<&str> = redir_vec[0].split('|').filter_map(|x| { //split command on pipe
             if x == "" {
                 None
             } else {
@@ -177,6 +208,8 @@ impl <'a>Shell<'a> {
             let my_rx = old_rx;  //set my_rx to be the previous receiver
             old_rx = rx; //now set prev rcvr to current rcvr
             let pipe = pipes[i].to_string(); //spawn a thread for next command
+            
+            
             thread::spawn(move|| {
             let arg: Vec<&str> = pipe.split(' ').filter_map(|x| {
                     if x == "" {
@@ -236,6 +269,7 @@ impl <'a>Shell<'a> {
                         Err(why) => {println!("error reading from recv {}", why); break;},
                         Ok(num) => {num}
                     };
+                    print!("{}", String::from_utf8_lossy(&message.info));
                     if message.eof{ break;}
                 }
             });
@@ -246,7 +280,17 @@ impl <'a>Shell<'a> {
                     Err(why) => {println!("error reading from recv {}", why); break;},
                     Ok(num) => {num}
                 };
-                print!("{}", String::from_utf8_lossy(&message.info));
+                //if there was forward redirection, create a file and write final
+                //output to it
+                if forward
+                {
+                    let mut f = File::create(&Path::new(filename));
+                    let mut writer = BufferedWriter::new(f);
+                    writer.write_str(String::from_utf8_lossy(&message.info[0..message.length]).as_slice()); //don't pad with 0's
+                //otherwise write final output to console
+                } else {
+                    print!("{}", String::from_utf8_lossy(&message.info));
+                }
                 if message.eof{ break;}
             }}
     }
