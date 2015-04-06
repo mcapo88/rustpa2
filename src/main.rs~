@@ -47,13 +47,8 @@ impl <'a>Shell<'a> {
             let cmd_line = line.trim();
             a.push_back(cmd_line.to_string());
             //let program = cmd_line.splitn(1, ' ').nth(0).expect("no program");
-            let command_split = cmd_line.split_str("|");
-            let command_vec = command_split.collect::<Vec<&str>>();
-            for i in 0..command_vec.len()
-            {
-                let full_cmd = command_vec[i].trim();
-                let copy = &full_cmd; //has to do with lifetime...
-                let mut program = full_cmd.splitn(1, ' ').nth(0).expect("no program");
+           
+                let mut program = cmd_line.splitn(1, ' ').nth(0).expect("no program");
                 //println!("program is {}", program);
                 //start a thread for the command
                 
@@ -64,7 +59,7 @@ impl <'a>Shell<'a> {
                     "history" => {self.history(&a);}
                      _       => {self.run_cmdline(cmd_line);}
                 }   
-            }
+            
         }
     }
     fn history(&self, a: &LinkedList<String>)
@@ -139,6 +134,7 @@ impl <'a>Shell<'a> {
             }
         }
     }
+    //we probably don't need this
     fn run_cmdline(&self, cmd_line: &str) {
         let argv: Vec<&str> = cmd_line.split(' ').filter_map(|x| {
             if x == "" {
@@ -155,34 +151,34 @@ impl <'a>Shell<'a> {
     }
 
     fn run_cmd(&self, cmd_line: &str) {
-        let cm_line = cmd_line.clone();  //it says it cannot infer an appropriate lifetime for parameter 'a due to conflicting requirements...?
-        //We want to split up the cmd_line by pipes
-        let pipes: Vec<&str> = cm_line.split('|').filter_map(|x| {
+    
+        let pipes: Vec<&str> = cmd_line.split('|').filter_map(|x| {
             if x == "" {
                 None
             } else {
                 Some(x)
             }
         }).collect();
-        let mut args: Vec<Vec<&str>> = Vec::new();
-        let mut programs: Vec<&str> = Vec::new();
-        let mut argvs: Vec<&[&str]> = Vec::new();
+        
+        
         //in a for loop, make a channel for every pair of pipes
         for i in 0..pipes.len(){
         //would declare channel here
         let (tx, rx) = channel::<message>();
-        args[i] = pipes[i].split(' ').filter_map(|x| {
+        let pipe = pipes[i].to_string();
+        thread::spawn(move|| {
+        let arg = pipe.split(' ').filter_map(|x| {
                     if x == "" {
                         None
                     } else {
                         Some(x)
                     }
                 }).collect();
-                programs[i] = args[i].first().unwrap();
-                argvs[i] = args[i].tail();
-        if self.cmd_exists(programs[i]) {
-            thread::spawn(move|| {
-            let output = Command::new(programs[i]).args(argvs[i]).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
+                let program = arg.first().unwrap();
+                let argv = arg.tail();
+        if Shell::cmd_exists(program) {
+            
+            let output = Command::new(program).args(argv).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
             let stderr=String::from_utf8_lossy(&output.stderr);
             let stdout=String::from_utf8_lossy(&output.stdout);
             if !"".eq(stdout.as_slice()) {
@@ -191,17 +187,19 @@ impl <'a>Shell<'a> {
             if !"".eq(stderr.as_slice()) {
                 print!("{}", stderr);
             }
-            let buf:[u8;MSG_SIZE] = stdout;
-            let msg = message{info:buf, length: stdout.len(), eof: false };
-            loop{tx.send(msg).unwrap();};}); //end of thread
+            //having some trouble getting stdout into buf (stdout is of type Cow<'_,str>?
+            //let buf:[u8;MSG_SIZE] = stdout;
+            //let msg = message{info:buf, length: stdout.len(), eof: false };
+            //loop{tx.send(msg).unwrap();};}); //end of thread
+            
         } else {
-            println!("{}: command not found", programs[i]);
-        }
-        loop{rx.recv();}
+            println!("{}: command not found", program);
+        }});//end of thread
+        //loop{rx.recv();}
         }//end of for loop
     }
 
-    fn cmd_exists(&self, cmd_path: &str) -> bool {
+    fn cmd_exists(cmd_path: &str) -> bool {
         Command::new("which").arg(cmd_path).stdout(Stdio::capture()).status().unwrap().success()
     }
 }
