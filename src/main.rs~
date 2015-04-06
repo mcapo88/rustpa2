@@ -167,7 +167,7 @@ impl <'a>Shell<'a> {
         let (tx, rx) = channel::<message>();
         let pipe = pipes[i].to_string();
         thread::spawn(move|| {
-        let arg = pipe.split(' ').filter_map(|x| {
+        let arg: Vec<&str> = pipe.split(' ').filter_map(|x| {
                     if x == "" {
                         None
                     } else {
@@ -177,16 +177,8 @@ impl <'a>Shell<'a> {
                 let program = arg.first().unwrap();
                 let argv = arg.tail();
         if Shell::cmd_exists(program) {
+            let process = Command::new(program).args(argv).stdin(Stdio::capture()).stdout(Stdio::capture()).stderr(Stdio::capture()).spawn();
             
-            let output = Command::new(program).args(argv).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
-            let stderr=String::from_utf8_lossy(&output.stderr);
-            let stdout=String::from_utf8_lossy(&output.stdout);
-            if !"".eq(stdout.as_slice()) {
-                print!("{}", stdout);
-            }
-            if !"".eq(stderr.as_slice()) {
-                print!("{}", stderr);
-            }
             //having some trouble getting stdout into buf (stdout is of type Cow<'_,str>?
             //let buf:[u8;MSG_SIZE] = stdout;
             //let msg = message{info:buf, length: stdout.len(), eof: false };

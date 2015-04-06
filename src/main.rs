@@ -12,6 +12,7 @@ use getopts::{optopt, getopts};
 use std::old_io::BufferedReader;
 use std::process::{Command, Stdio};
 use std::old_io::stdin;
+use std::io::Read;
 use std::{old_io, os};
 use std::str;
 use std::env;
@@ -21,7 +22,7 @@ use std::thread; //for spawning multiple threads of piped commands
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::os::getcwd;
 const MSG_SIZE: usize = 128; //how big the buffer will be (bytes)
-//the message struct is what we'll be passing from sender to receiver
+//the message struct is what we'll be passing from sender to receiver;
 struct message{
     info: [u8;MSG_SIZE],
     length: usize,
@@ -177,16 +178,21 @@ impl <'a>Shell<'a> {
                 let program = arg.first().unwrap();
                 let argv = arg.tail();
         if Shell::cmd_exists(program) {
-            
-            let output = Command::new(program).args(argv).output().unwrap_or_else(|e| {panic!("failed to execute process: {}", e)});
-            let stderr=String::from_utf8_lossy(&output.stderr);
-            let stdout=String::from_utf8_lossy(&output.stdout);
-            if !"".eq(stdout.as_slice()) {
-                print!("{}", stdout);
+            let process = match Command::new(program).args(argv).stdin(Stdio::capture()).stdout(Stdio::capture()).stderr(Stdio::capture()).spawn() {
+                Err(why) => panic!("couldn't spawn {}: {}", program, why.description()),
+                Ok(process) => process,
+            };
+
+            let mut stdout = process.stdout.unwrap();
+            loop{
+                let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
+                let buffer_s = match stdout.read(&mut result) {
+                    Err(why) => {panic!("couldn't read stdout {}", why.description()); },
+                    Ok(num) => {if num == 0 { break;} num},
+                };
+                println!("{}", String::from_utf8_lossy(&result));
             }
-            if !"".eq(stderr.as_slice()) {
-                print!("{}", stderr);
-            }
+
             //having some trouble getting stdout into buf (stdout is of type Cow<'_,str>?
             //let buf:[u8;MSG_SIZE] = stdout;
             //let msg = message{info:buf, length: stdout.len(), eof: false };
