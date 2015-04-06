@@ -46,6 +46,7 @@ impl <'a>Shell<'a> {
             let x = stdin.read_line();
             let line = x.unwrap();
             let cmd_line = line.trim();
+            
             a.push_back(cmd_line.to_string());
             //let program = cmd_line.splitn(1, ' ').nth(0).expect("no program");
            
@@ -144,11 +145,11 @@ impl <'a>Shell<'a> {
                 Some(x)
             }
         }).collect();
-
         match argv.first() {
             Some(&program) => self.run_cmd(cmd_line),
             None => (),
         };
+       
     }
 
     fn run_cmd(&self, cmd_line: &str) {
@@ -160,7 +161,12 @@ impl <'a>Shell<'a> {
                 Some(x)
             }
         }).collect();
-        
+        let last = pipes[pipes.len()-1];
+        //println!("last pipe is {}", last);
+        let last_split = last.split(' ');
+        let last_parts: Vec<&str> = last_split.collect();
+        let last2 = last_parts[last_parts.len()-1];
+        //println!("last symbol is {}", last2);
         let (tx, rx) = channel::<message>(); //initial channel
         tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
         let mut old_rx: Receiver<message> = rx; //initialize previous receiver
@@ -195,8 +201,9 @@ impl <'a>Shell<'a> {
                             break;},
                         Ok(num) => {num},
                     };
-
-                    match stdin.write(&message.info) {
+                    //if the message does not fill the whole buffer, only read in 
+                    //the message, not the 0's.
+                    match stdin.write(&message.info[0..message.length]) {
                         Err(why) => {break;},
                         Ok(hm) => {},
                     };
@@ -212,6 +219,7 @@ impl <'a>Shell<'a> {
                         Err(why) => {panic!("couldn't read stdout {}", why.description()); },
                         Ok(num) => {if num == 0 { break;} num},
                     };
+                    //println!("buff size is: {}", buffer_s);
                     let message = message{info: result, length: buffer_s, eof: buffer_s<MSG_SIZE};
                     tx.send(message);
                 }
@@ -220,14 +228,27 @@ impl <'a>Shell<'a> {
             }});//end of thread
         }//end of for loop
         //get the output from the final command in the chain, then print it
-        loop{
-            let message = match old_rx.recv(){
-                Err(why) => {println!("error reading from recv {}", why); break;},
-                Ok(num) => {num}
-            };
-            println!("Final output: {}", String::from_utf8_lossy(&message.info));
-            if message.eof{ break;}
-        }
+        if last2 == "&" //If true run command in the background
+        {
+            thread::spawn(move|| {
+                loop{
+                    let message = match old_rx.recv(){
+                        Err(why) => {println!("error reading from recv {}", why); break;},
+                        Ok(num) => {num}
+                    };
+                    if message.eof{ break;}
+                }
+            });
+            return;
+        } else {
+            loop{
+                let message = match old_rx.recv(){
+                    Err(why) => {println!("error reading from recv {}", why); break;},
+                    Ok(num) => {num}
+                };
+                print!("{}", String::from_utf8_lossy(&message.info));
+                if message.eof{ break;}
+            }}
     }
 
     fn cmd_exists(cmd_path: &str) -> bool {
