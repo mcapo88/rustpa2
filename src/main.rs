@@ -12,7 +12,7 @@ use getopts::{optopt, getopts};
 use std::old_io::BufferedReader;
 use std::process::{Command, Stdio};
 use std::old_io::stdin;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::{old_io, os};
 use std::str;
 use std::env;
@@ -153,7 +153,7 @@ impl <'a>Shell<'a> {
 
     fn run_cmd(&self, cmd_line: &str) {
     
-        let pipes: Vec<&str> = cmd_line.split('|').filter_map(|x| {
+        let pipes: Vec<&str> = cmd_line.split('|').filter_map(|x| { //split command on pipe
             if x == "" {
                 None
             } else {
@@ -161,48 +161,73 @@ impl <'a>Shell<'a> {
             }
         }).collect();
         
-        
+        let (tx, rx) = channel::<message>(); //initial channel
+        tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
+        let mut old_rx: Receiver<message> = rx; //initialize previous receiver
+
         //in a for loop, make a channel for every pair of pipes
         for i in 0..pipes.len(){
-        //would declare channel here
-        let (tx, rx) = channel::<message>();
-        let pipe = pipes[i].to_string();
-        thread::spawn(move|| {
-        let arg: Vec<&str> = pipe.split(' ').filter_map(|x| {
+            let (tx, rx) = channel::<message>();//declare new channel here
+            let my_rx = old_rx;  //set my_rx to be the previous receiver
+            old_rx = rx; //now set prev rcvr to current rcvr
+            let pipe = pipes[i].to_string(); //spawn a thread for next command
+            thread::spawn(move|| {
+            let arg: Vec<&str> = pipe.split(' ').filter_map(|x| {
                     if x == "" {
                         None
                     } else {
                         Some(x)
                     }
-                }).collect();
-                let program = arg.first().unwrap();
-                let argv = arg.tail();
-        if Shell::cmd_exists(program) {
-            let process = match Command::new(program).args(argv).stdin(Stdio::capture()).stdout(Stdio::capture()).stderr(Stdio::capture()).spawn() {
-                Err(why) => panic!("couldn't spawn {}: {}", program, why.description()),
-                Ok(process) => process,
-            };
-
-            let mut stdout = process.stdout.unwrap();
-            loop{
-                let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
-                let buffer_s = match stdout.read(&mut result) {
-                    Err(why) => {panic!("couldn't read stdout {}", why.description()); },
-                    Ok(num) => {if num == 0 { break;} num},
+            }).collect();
+            let program = arg.first().unwrap();
+            let argv = arg.tail();
+            if Shell::cmd_exists(program) {
+                let process = match Command::new(program).args(argv).stdin(Stdio::capture()).stdout(Stdio::capture()).stderr(Stdio::capture()).spawn() {
+                    Err(why) => panic!("couldn't spawn {}: {}", program, why.description()),
+                    Ok(process) => process,
                 };
-                println!("{}", String::from_utf8_lossy(&result));
-            }
+                {
+                let mut stdin = process.stdin.unwrap();
+                //receive stdout from the previous command
+                loop{
+                    let message = match my_rx.recv(){
+                        Err(why) => {println!("error reading from recv {}", why);
+                            break;},
+                        Ok(num) => {num},
+                    };
 
-            //having some trouble getting stdout into buf (stdout is of type Cow<'_,str>?
-            //let buf:[u8;MSG_SIZE] = stdout;
-            //let msg = message{info:buf, length: stdout.len(), eof: false };
-            //loop{tx.send(msg).unwrap();};}); //end of thread
-            
-        } else {
-            println!("{}: command not found", program);
-        }});//end of thread
-        //loop{rx.recv();}
+                    match stdin.write(&message.info) {
+                        Err(why) => {break;},
+                        Ok(hm) => {},
+                    };
+
+                    if message.eof{ break;}
+                }
+                }
+                let mut stdout = process.stdout.unwrap();
+                //send the output to the next command in the chain
+                loop{ //reads byte sized blocks of given command thread 
+                    let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
+                    let buffer_s = match stdout.read(&mut result) {
+                        Err(why) => {panic!("couldn't read stdout {}", why.description()); },
+                        Ok(num) => {if num == 0 { break;} num},
+                    };
+                    let message = message{info: result, length: buffer_s, eof: buffer_s<MSG_SIZE};
+                    tx.send(message);
+                }
+            } else {
+                println!("{}: command not found", program);
+            }});//end of thread
         }//end of for loop
+        //get the output from the final command in the chain, then print it
+        loop{
+            let message = match old_rx.recv(){
+                Err(why) => {println!("error reading from recv {}", why); break;},
+                Ok(num) => {num}
+            };
+            println!("Final output: {}", String::from_utf8_lossy(&message.info));
+            if message.eof{ break;}
+        }
     }
 
     fn cmd_exists(cmd_path: &str) -> bool {
