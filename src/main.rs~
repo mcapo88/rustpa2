@@ -230,19 +230,24 @@ impl <'a>Shell<'a> {
             let mut fullpath = format!("{}{}",path,filename2.trim());
             //println!("and now it's {}", fullpath);
             let path = Path::new(fullpath);
-            let mut f = File::open(&path);
-            let mut fstring = f.read_to_string();
-            
+            let mut reader = BufferedReader::new(File::open(&path));
             loop{ //reads byte sized blocks of given command thread 
                     let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
-                    let buffer_s = match f.read_line(&mut result) {
-                        Err(why) => {panic!("couldn't read stdout");},
-                        Ok(num) => {if num == 0 { break;} num},
-                    };
+                    let buffer_s = match reader.read(&mut result){
+                        Err(why) => {println!("error reading from file: {}", why);
+                            break;},
+                        Ok(num) => {num},
+                    }; 
                     //println!("buff size is: {}", buffer_s);
                     let message = message{info: result, length: buffer_s, eof: buffer_s<MSG_SIZE};
                     tx.send(message);
-              }
+                }
+                    //for line in reader.lines() {
+                    //    println!("{}", line.unwrap());
+                    //}
+            //println!("{}",fstring);
+            //send the output to the next command in the chain
+            
                     
         } else { //if no backward redirection in first pipe
             //send an empty message struct to first pipe
