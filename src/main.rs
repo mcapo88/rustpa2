@@ -176,7 +176,7 @@ impl <'a>Shell<'a> {
             //let mut f = File::create(&Path::new(filename));
         }
         //same as above but for backward redirection
-        let backward_redir_split = cmd_line.split('<');
+        /*let backward_redir_split = cmd_line.split('<');
         let backward_redir_vec: Vec<&str> = backward_redir_split.collect();
         let mut filename2 = " ";
         
@@ -187,7 +187,7 @@ impl <'a>Shell<'a> {
             println!("filename is {}", filename2);
             backward = true;
             //let mut f = File::create(&Path::new(filename2));
-        }
+        }*/
         let last = redir_vec[redir_vec.len()-1];
         //println!("last pipe is {}", last);
         let last_split = last.split(' ');
@@ -195,13 +195,13 @@ impl <'a>Shell<'a> {
         let last2 = last_parts[last_parts.len()-1];
         //need to cut off ampersand whether forward, backward, or no redirection
         let mut ampersand: Vec<&str> = Vec::new();
-        if forward{
+        //if forward{
             let ampersand_split = redir_vec[0].split('&');
             ampersand = ampersand_split.collect();
-        } else {
-            let ampersand_split = backward_redir_vec[0].split('&');
-            ampersand = ampersand_split.collect();
-        }
+        //} else {
+            //let ampersand_split = backward_redir_vec[0].split('&');
+            //ampersand = ampersand_split.collect();
+        //}
         let pipes: Vec<&str> = ampersand[0].split('|').filter_map(|x| { //split command on pipe
             if x == "" {
                 None
@@ -209,12 +209,47 @@ impl <'a>Shell<'a> {
                 Some(x)
             }
         }).collect();
-        
-        //println!("last symbol is {}", last2);
+        let mut backward_check_split = pipes[0].split('<');
+        let mut backward_check_vec: Vec<&str> = backward_check_split.collect();
         let (tx, rx) = channel::<message>(); //initial channel
-        tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
-        let mut old_rx: Receiver<message> = rx; //initialize previous receiver
-
+        let mut old_rx: Receiver<message> = rx;
+        if backward_check_vec.len() > 1
+        {
+            let filename2 = backward_check_vec[1];
+            let cwd = getcwd().unwrap();
+            let mut cwd_string = "";
+            match cwd.as_str()
+            {
+                None => panic!("path can't be converted to a string"),
+                Some(s) => cwd_string = s,
+            }
+            //println!("path is {}", cwd_string);
+            let slash = "/";
+            let mut path = format!("{}{}",cwd_string, slash);
+            //println!("now it's {}", path);
+            let mut fullpath = format!("{}{}",path,filename2.trim());
+            //println!("and now it's {}", fullpath);
+            let path = Path::new(fullpath);
+            let mut f = File::open(&path);
+            let contents = f.read_to_end().unwrap();
+            //println!(contents);
+            
+            loop{ //reads byte sized blocks of given command thread 
+                    let mut result: [u8; MSG_SIZE] = [0;MSG_SIZE];
+                    let buffer_s = match contents.unwrap().read_line(&mut result) {
+                        Err(why) => {panic!("couldn't read stdout");},
+                        Ok(num) => {if num == 0 { break;} num},
+                    };
+                    //println!("buff size is: {}", buffer_s);
+                    let message = message{info: result, length: buffer_s, eof: buffer_s<MSG_SIZE};
+                    tx.send(message);
+              }
+                    
+        } else { //if no backward redirection in first pipe
+            //send an empty message struct to first pipe
+            tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
+            //let mut old_rx: Receiver<message> = rx; //initialize previous receiver
+        }
         //in a for loop, make a channel for every pair of pipes
         for i in 0..pipes.len(){
             let (tx, rx) = channel::<message>();//declare new channel here
@@ -315,21 +350,7 @@ impl <'a>Shell<'a> {
                 /*} else if backward {
                     println!("filename is {}", filename2);
                     println!("backward");
-                    let cwd = getcwd().unwrap();
-                    let mut cwd_string = "";
-                    match cwd.as_str()
-                    {
-                        None => panic!("path can't be converted to a string"),
-                        Some(s) => cwd_string = s,
-                    }
-                    //println!("path is {}", cwd_string);
-                    let slash = "/";
-                    let mut path = format!("{}{}",cwd_string, slash);
-                    //println!("now it's {}", path);
-                    let mut fullpath = format!("{}{}",path,filename2.trim());
-                    //println!("and now it's {}", fullpath);
-                    let path = Path::new(fullpath);
-                    let mut reader = BufferedReader::new(File::open(&path));
+                    
                  
                     for line in file.lines() {
                         println!("{}", line.unwrap());
