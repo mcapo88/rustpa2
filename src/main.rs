@@ -66,10 +66,12 @@ impl <'a>Shell<'a> {
             
         }
     }
+    //take sender as a parameter so next thread can read
     fn history(&self, a: &LinkedList<String>)
     {
         for e in a.iter()
         {
+            //instead of printing, send message
             println!("{}", e);
         }
     }
@@ -166,7 +168,9 @@ impl <'a>Shell<'a> {
         if redir_vec.len() > 1
         {
             println!("forward redirection");
-            filename = redir_vec[1]; //filename is second element
+            let amp_split = redir_vec[1].split('&');
+            let amp: Vec<&str> = amp_split.collect(); //cut out &
+            filename = amp[0]; //filename is second element
             println!("filename is {}", filename);
             forward = true; //set forward boolean to true
             //let mut f = File::create(&Path::new(filename));
@@ -184,19 +188,28 @@ impl <'a>Shell<'a> {
             backward = true;
             //let mut f = File::create(&Path::new(filename2));
         }
-         
-        let pipes: Vec<&str> = redir_vec[0].split('|').filter_map(|x| { //split command on pipe
+        let last = redir_vec[redir_vec.len()-1];
+        //println!("last pipe is {}", last);
+        let last_split = last.split(' ');
+        let last_parts: Vec<&str> = last_split.collect();
+        let last2 = last_parts[last_parts.len()-1];
+        //need to cut off ampersand whether forward, backward, or no redirection
+        let mut ampersand: Vec<&str> = Vec::new();
+        if forward{
+            let ampersand_split = redir_vec[0].split('&');
+            ampersand = ampersand_split.collect();
+        } else {
+            let ampersand_split = backward_redir_vec[0].split('&');
+            ampersand = ampersand_split.collect();
+        }
+        let pipes: Vec<&str> = ampersand[0].split('|').filter_map(|x| { //split command on pipe
             if x == "" {
                 None
             } else {
                 Some(x)
             }
         }).collect();
-        let last = pipes[pipes.len()-1];
-        //println!("last pipe is {}", last);
-        let last_split = last.split(' ');
-        let last_parts: Vec<&str> = last_split.collect();
-        let last2 = last_parts[last_parts.len()-1];
+        
         //println!("last symbol is {}", last2);
         let (tx, rx) = channel::<message>(); //initial channel
         tx.send(message{info:[0;MSG_SIZE], length:0, eof: true}); //send end of file 
@@ -263,13 +276,23 @@ impl <'a>Shell<'a> {
         //get the output from the final command in the chain, then print it
         if last2 == "&" //If true run command in the background
         {
+            let fname: String = filename.to_string();
             thread::spawn(move|| {
                 loop{
                     let message = match old_rx.recv(){
                         Err(why) => {println!("error reading from recv {}", why); break;},
                         Ok(num) => {num}
                     };
-                    print!("{}", String::from_utf8_lossy(&message.info));
+                    if forward //redirection AND in background
+                    {
+                        println!("forward");
+                        println!("fname is {}", fname);
+                        let mut f = File::create(&Path::new(&fname));
+                        let mut writer = BufferedWriter::new(f);
+                        writer.write_str(String::from_utf8_lossy(&message.info[0..message.length]).as_slice()); //don't pad with 0's
+                    } else {
+                        print!("{}", String::from_utf8_lossy(&message.info));
+                    }
                     if message.eof{ break;}
                 }
             });
@@ -284,10 +307,33 @@ impl <'a>Shell<'a> {
                 //output to it
                 if forward
                 {
+                    //println!("filename is {}", filename);
                     let mut f = File::create(&Path::new(filename));
                     let mut writer = BufferedWriter::new(f);
                     writer.write_str(String::from_utf8_lossy(&message.info[0..message.length]).as_slice()); //don't pad with 0's
                 //otherwise write final output to console
+                /*} else if backward {
+                    println!("filename is {}", filename2);
+                    println!("backward");
+                    let cwd = getcwd().unwrap();
+                    let mut cwd_string = "";
+                    match cwd.as_str()
+                    {
+                        None => panic!("path can't be converted to a string"),
+                        Some(s) => cwd_string = s,
+                    }
+                    //println!("path is {}", cwd_string);
+                    let slash = "/";
+                    let mut path = format!("{}{}",cwd_string, slash);
+                    //println!("now it's {}", path);
+                    let mut fullpath = format!("{}{}",path,filename2.trim());
+                    //println!("and now it's {}", fullpath);
+                    let path = Path::new(fullpath);
+                    let mut reader = BufferedReader::new(File::open(&path));
+                 
+                    for line in file.lines() {
+                        println!("{}", line.unwrap());
+                    }*/
                 } else {
                     print!("{}", String::from_utf8_lossy(&message.info));
                 }
